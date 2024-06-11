@@ -1,0 +1,135 @@
+plugins {
+    id "groovy"
+    id "maven-publish"
+    id "codenarc"
+    id 'org.ajoberstar.grgit' version '5.2.2'
+    id 'pl.allegro.tech.build.axion-release' version '1.15.1'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+sourceSets {
+    integrationTest {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+configurations {
+    integrationTestImplementation.extendsFrom implementation
+    integrationTestRuntimeOnly.extendsFrom runtimeOnly
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.apache.groovy:groovy-xml:4.0.21'
+    implementation 'org.apache.groovy:groovy-json:4.0.21'
+
+    testImplementation 'org.spockframework:spock-core:2.3-groovy-4.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'net.bytebuddy:byte-buddy:1.14.17'
+
+    integrationTestImplementation 'org.spockframework:spock-core:2.3-groovy-4.0'
+    integrationTestImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+
+    codenarc 'org.codenarc:CodeNarc:3.4.0-groovy-4.0'
+    codenarc 'org.apache.groovy:groovy-xml:4.0.21'
+    codenarc 'org.apache.groovy:groovy-json:4.0.21'
+}
+
+//compileGroovy.options.compilerArgs = ['-Xlint:unchecked']
+
+task sourcesJar(type: Jar, dependsOn: classes) {
+    archiveClassifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+task javadocJar(type: Jar, dependsOn: javadoc) {
+    archiveClassifier = 'javadoc'
+    from javadoc.destinationDir
+}
+
+task groovydocJar(type: Jar, dependsOn: groovydoc) {
+    archiveClassifier = 'groovydoc'
+    from groovydoc.destinationDir
+}
+
+test {
+    useJUnitPlatform {
+        jvmArgs = ["--add-opens", "java.base/java.lang=ALL-UNNAMED"]
+    }
+}
+
+task runIntegrationTests(type: Test, group: 'test') {
+    useJUnitPlatform {}
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+}
+
+tasks.withType(CodeNarc) {
+    ignoreFailures = true
+    configFile = file("$rootProject.projectDir/config/codenarc/codenarc.groovy")
+}
+
+def getBranchName() {
+    //check if branch name is set in jenkins
+    String gitBranch = System.env.GIT_BRANCH
+    if (gitBranch != null && gitBranch != "") {
+        if (gitBranch.lastIndexOf("/") > -1) {
+            return gitBranch.substring(gitBranch.lastIndexOf("/") + 1)
+        } else {
+            return gitBranch
+        }
+    } else {
+        return grgit.branch.current().name
+    }
+}
+
+scmVersion {
+    tag {
+        prefix = getBranchName() + '-'
+    }
+    versionCreator { version, position -> getBranchName() + "-" + version }
+    checks {
+        uncommittedChanges = false
+    }
+}
+
+//if environment variable is set from Jenkins we are cloned from a tag
+//and scmVersion is not available
+def artifactVersion
+def ARTIFACT_VERSION = System.properties['git.release.tag']
+if (ARTIFACT_VERSION != null) {
+    //master versions do not contain branch name in artifact repository
+    artifactVersion = ARTIFACT_VERSION.replaceFirst("master-", "")
+} else {
+    project.version = scmVersion.version
+    artifactVersion = project.version
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            groupId "com.openjaw"
+            artifactId "groovy-wslite"
+            from components.java
+            artifact sourcesJar
+            artifact groovydocJar
+        }
+    }
+}
+
+compileGroovy.dependsOn clean
+compileTestGroovy.dependsOn clean
+compileIntegrationTestGroovy.dependsOn clean
+runIntegrationTests.mustRunAfter test
+publish.dependsOn test
+publish.mustRunAfter test
+publish.dependsOn runIntegrationTests
+publish.mustRunAfter runIntegrationTests
